@@ -1,0 +1,52 @@
+#cloud-config
+# Example user-data for a cloned VM with an extra data disk.
+# Replace placeholders before use.
+
+users:
+  - default
+  - name: jack
+    groups: [sudo]
+    shell: /bin/bash
+    sudo: ALL=(ALL) NOPASSWD:ALL
+    lock_passwd: false
+    passwd: "$6$REPLACE_WITH_SHA512_HASH"
+    ssh_authorized_keys:
+      - "ssh-ed25519 REPLACE_WITH_YOUR_PUBLIC_KEY"
+
+package_update: true
+packages:
+  - qemu-guest-agent
+  - xfsprogs
+
+write_files:
+  - path: /usr/local/sbin/provision-extra-disk.sh
+    permissions: "0755"
+    owner: root:root
+    content: |
+      #!/usr/bin/env bash
+      set -euo pipefail
+      DEVICE="/dev/vdb"
+      FSTYPE="xfs"
+      MOUNTPOINT="/home/jack"
+      MARKER="/var/lib/cloud/instance/extra-disk.done"
+
+      [[ -f "$MARKER" ]] && exit 0
+      [[ -b "$DEVICE" ]] || exit 0
+
+      if ! blkid "$DEVICE" >/dev/null 2>&1; then
+        if [[ "$FSTYPE" == "xfs" ]]; then
+          mkfs.xfs -f "$DEVICE"
+        else
+          mkfs.ext4 -F "$DEVICE"
+        fi
+      fi
+
+      mkdir -p "$MOUNTPOINT"
+      UUID=$(blkid -s UUID -o value "$DEVICE")
+      grep -q "UUID=$UUID" /etc/fstab || echo "UUID=$UUID $MOUNTPOINT $FSTYPE defaults,nofail 0 2" >> /etc/fstab
+      mount -a
+
+      touch "$MARKER"
+
+runcmd:
+  - [bash, -lc, "/usr/local/sbin/provision-extra-disk.sh"]

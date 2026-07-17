@@ -9,6 +9,9 @@ Blog post: [Golden Images and Proxmox Templates with cloud-init]
 
 - [`vendor-data-minimal.yaml`](/cloud-init/vendor-data-minimal.yaml): A minimal
   cloud-init file for running a VM on Proxmox.
+- [`user-data-extra-disk.yaml`](/cloud-init/user-data-extra-disk.yaml): Example
+  user-data file for creating a user, injecting an SSH key, and mounting an
+  extra disk on first boot.
 
 ## Shell Scripts
 
@@ -253,6 +256,35 @@ build-template -i 9000 -n ubuntu24 --img /var/lib/vz/template/iso/ubuntu-24.04-s
 | `--storage`, `-s`  | Specify the VM storage                                            | `local-lvm`        | No       |
 | `--scsihw`         | Specify the VM storage controller                                 | `virtio-scsi-pci`  | No       |
 | `--vendor-file`    | Specify the cloud-init vendor file                                | `vendor-data.yaml` | No       |
+
+### Clone and Provision Example
+
+[`code-examples/clone-and-provision`](/code-examples/clone-and-provision):
+Example script to clone a template VM, add an extra disk, and attach
+cloud-init user-data for user credentials, SSH key injection, and first-boot
+filesystem/mount setup.
+
+```bash
+# create a SHA-512 password hash for cloud-init
+openssl passwd -6
+
+# clone template 9000 into db-vm01 (ID 9101) and add a 16G extra disk
+./code-examples/clone-and-provision \
+  --template-id 9000 --id 9101 --name db-vm01 \
+  --datastore local-lvm --size 16G \
+  --mountpoint /home/jack --fstype xfs \
+  --ci-user jack --ssh-pubkey-file /root/.ssh/id_ed25519.pub \
+  --ci-password-hash '$6$...'
+```
+
+Notes:
+
+- The script writes a per-VM cloud-init snippet to
+  `/var/lib/vz/snippets/<vm-name>-user-data.yaml`.
+- The script uses `--virtio1` for the extra disk and sets a serial so the guest
+  can mount by `/dev/disk/by-id/virtio-<serial>`.
+- Start the VM after cloning with `qm start <vmid>` so cloud-init can apply the
+  new user-data.
 
 ## Contributors
 

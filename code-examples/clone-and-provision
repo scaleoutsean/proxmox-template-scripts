@@ -1,0 +1,227 @@
+#!/bin/bash
+#
+# Code example: clone a template, add an extra data disk, and provision guest
+# credentials + disk mount behavior with cloud-init user-data.
+
+set -euo pipefail
+
+TEMPLATE_ID=${TEMPLATE_ID:-"9000"}
+VM_ID=${VM_ID:-"9100"}
+VM_NAME=${VM_NAME:-"cloned-vm"}
+FULL_CLONE=${FULL_CLONE:-"true"}
+
+EXTRA_DATASTORE=${EXTRA_DATASTORE:-"local-lvm"}
+EXTRA_SIZE=${EXTRA_SIZE:-"16G"}
+EXTRA_MOUNTPOINT=${EXTRA_MOUNTPOINT:-"/home/jack"}
+EXTRA_FSTYPE=${EXTRA_FSTYPE:-"xfs"}
+
+CI_USER=${CI_USER:-"jack"}
+CI_PASSWORD_HASH=${CI_PASSWORD_HASH:-""}
+SSH_PUBKEY_FILE=${SSH_PUBKEY_FILE:-"$HOME/.ssh/id_rsa.pub"}
+
+function err() {
+  echo "Error: $*" >&2
+  exit 2
+}
+
+function usage() {
+  cat >&2 <<'EOF'
+Usage: clone-and-provision --template-id <ID> --id <VM_ID> --name <VM_NAME> [ARGS]
+
+Required:
+  --template-id <ID>         Source template ID, e.g. 9000
+  --id <VM_ID>               New VM ID
+  --name <VM_NAME>           New VM name
+  --ci-password-hash <HASH>  SHA-512 hash from: openssl passwd -6
+
+Optional:
+  --full-clone <true|false>  Full clone (default: true)
+  --datastore <NAME>         Extra disk datastore (default: local-lvm)
+  --size <SIZE>              Extra disk size (default: 16G)
+  --mountpoint <PATH>        Mount point in guest (default: /home/jack)
+  --fstype <ext4|xfs>        Filesystem for extra disk (default: xfs)
+  --ci-user <NAME>           Cloud-init username (default: jack)
+  --ssh-pubkey-file <PATH>   Public key file (default: ~/.ssh/id_rsa.pub)
+
+Example:
+  clone-and-provision \
+    --template-id 9000 --id 9101 --name db-vm01 \
+    --datastore local-lvm --size 16G \
+    --mountpoint /home/jack --fstype xfs \
+    --ci-user jack --ssh-pubkey-file /root/.ssh/id_ed25519.pub \
+    --ci-password-hash '$6$...'
+EOF
+  exit 2
+}
+
+for _ in "$@"; do
+  [[ $# -gt 1 && ${2} == -* ]] && err "Missing argument for ${1}"
+  case "${1}" in
+  --help|-h)
+    usage
+    ;;
+  --template-id)
+    TEMPLATE_ID=${2}
+    shift 2
+    ;;
+  --id)
+    VM_ID=${2}
+    shift 2
+    ;;
+  --name)
+    VM_NAME=${2}
+    shift 2
+    ;;
+  --full-clone)
+    FULL_CLONE=${2}
+    shift 2
+    ;;
+  --datastore)
+    EXTRA_DATASTORE=${2}
+    shift 2
+    ;;
+  --size)
+    EXTRA_SIZE=${2}
+    shift 2
+    ;;
+  --mountpoint)
+    EXTRA_MOUNTPOINT=${2}
+    shift 2
+    ;;
+  --fstype)
+    EXTRA_FSTYPE=${2}
+    shift 2
+    ;;
+  --ci-user)
+    CI_USER=${2}
+    shift 2
+    ;;
+  --ci-password-hash)
+    CI_PASSWORD_HASH=${2}
+    shift 2
+    ;;
+  --ssh-pubkey-file)
+    SSH_PUBKEY_FILE=${2}
+    shift 2
+    ;;
+  -* )
+    err "Unknown Argument: $1"
+    ;;
+  *)
+    break
+    ;;
+  esac
+done
+
+[[ -z "${TEMPLATE_ID}" ]] && err "Missing --template-id"
+[[ -z "${VM_ID}" ]] && err "Missing --id"
+[[ -z "${VM_NAME}" ]] && err "Missing --name"
+[[ -z "${CI_PASSWORD_HASH}" ]] && err "Missing --ci-password-hash"
+[[ -r "${SSH_PUBKEY_FILE}" ]] || err "Cannot read SSH pubkey file: ${SSH_PUBKEY_FILE}"
+
+if [[ "${EXTRA_FSTYPE}" != "xfs" && "${EXTRA_FSTYPE}" != "ext4" ]]; then
+  err "--fstype must be xfs or ext4"
+fi
+
+if ! command -v qm >/dev/null 2>&1; then
+  err "qm command not found"
+fi
+
+if ! qm status "${TEMPLATE_ID}" >/dev/null 2>&1; then
+  err "Template VM ID not found: ${TEMPLATE_ID}"
+fi
+
+if qm status "${VM_ID}" >/dev/null 2>&1; then
+  err "Target VM ID already exists: ${VM_ID}"
+fi
+
+ssh_key=$(<"${SSH_PUBKEY_FILE}")
+snippet_file="/var/lib/vz/snippets/${VM_NAME}-user-data.yaml"
+snippet_name="${VM_NAME}-user-data.yaml"
+disk_serial="data${VM_ID}"
+disk_by_id="/dev/disk/by-id/virtio-${disk_serial}"
+
+echo "Template ID:        ${TEMPLATE_ID}"
+echo "Target VM ID:       ${VM_ID}"
+echo "Target VM Name:     ${VM_NAME}"
+echo "Full Clone:         ${FULL_CLONE}"
+echo "Extra Datastore:    ${EXTRA_DATASTORE}"
+echo "Extra Disk Size:    ${EXTRA_SIZE}"
+echo "Extra Filesystem:   ${EXTRA_FSTYPE}"
+echo "Extra Mount Point:  ${EXTRA_MOUNTPOINT}"
+echo "Cloud-init User:    ${CI_USER}"
+echo "Cloud-init Snippet: ${snippet_file}"
+
+if [[ ! -d /var/lib/vz/snippets ]]; then
+  err "/var/lib/vz/snippets directory is missing, enable snippets storage"
+fi
+
+cat >"${snippet_file}" <<EOF
+#cloud-config
+users:
+  - default
+  - name: ${CI_USER}
+    groups: [sudo]
+    shell: /bin/bash
+    sudo: ALL=(ALL) NOPASSWD:ALL
+    lock_passwd: false
+    passwd: ${CI_PASSWORD_HASH}
+    ssh_authorized_keys:
+      - ${ssh_key}
+
+package_update: true
+packages:
+  - qemu-guest-agent
+
+write_files:
+  - path: /usr/local/sbin/provision-extra-disk.sh
+    permissions: "0755"
+    owner: root:root
+    content: |
+      #!/usr/bin/env bash
+      set -euo pipefail
+      DEVICE="${disk_by_id}"
+      FSTYPE="${EXTRA_FSTYPE}"
+      MOUNTPOINT="${EXTRA_MOUNTPOINT}"
+      MARKER="/var/lib/cloud/instance/extra-disk.done"
+
+      [[ -f "\$MARKER" ]] && exit 0
+      [[ -b "\$DEVICE" ]] || exit 0
+
+      if ! blkid "\$DEVICE" >/dev/null 2>&1; then
+        if [[ "\$FSTYPE" == "xfs" ]]; then
+          if ! command -v mkfs.xfs >/dev/null 2>&1; then
+            apt-get update
+            apt-get install -y xfsprogs
+          fi
+          mkfs.xfs -f "\$DEVICE"
+        else
+          mkfs.ext4 -F "\$DEVICE"
+        fi
+      fi
+
+      mkdir -p "\$MOUNTPOINT"
+      UUID=\$(blkid -s UUID -o value "\$DEVICE")
+      grep -q "UUID=\$UUID" /etc/fstab || echo "UUID=\$UUID \$MOUNTPOINT \$FSTYPE defaults,nofail 0 2" >> /etc/fstab
+      mount -a
+
+      touch "\$MARKER"
+
+runcmd:
+  - [bash, -lc, "/usr/local/sbin/provision-extra-disk.sh"]
+EOF
+
+echo "Cloning template..."
+if [[ "${FULL_CLONE}" == "true" ]]; then
+  qm clone "${TEMPLATE_ID}" "${VM_ID}" --name "${VM_NAME}" --full true
+else
+  qm clone "${TEMPLATE_ID}" "${VM_ID}" --name "${VM_NAME}" --full false
+fi
+
+echo "Adding extra disk..."
+qm set "${VM_ID}" --virtio1 "${EXTRA_DATASTORE}:${EXTRA_SIZE},discard=on,ssd=1,serial=${disk_serial}"
+
+echo "Applying cloud-init user-data snippet..."
+qm set "${VM_ID}" --cicustom "user=local:snippets/${snippet_name}"
+
+echo "Done. Start VM with: qm start ${VM_ID}"
