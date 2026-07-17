@@ -36,7 +36,7 @@ Blog post: [Golden Images and Proxmox Templates with cloud-init]
   `/var/lib/vz/snippets/` (default directory for the script):
 
   ```bash
-  wget -P /var/lib/vz/snippets/ https://raw.githubusercontent.com/trfore/proxmox-template-scripts/refs/heads/main/cloud-init/vendor-data.yaml
+  wget -P /var/lib/vz/snippets/ https://raw.githubusercontent.com/scaleoutsean/proxmox-template-scripts/refs/heads/master/cloud-init/vendor-data.yaml
   ```
 
 - Copy the scripts into `/usr/local/bin` on your Proxmox node(s):
@@ -44,21 +44,26 @@ Blog post: [Golden Images and Proxmox Templates with cloud-init]
   - For Systems using LVM Storage (Default) - [scripts](/scripts/)
 
     ```bash
-    wget -P /usr/local/bin/ https://raw.githubusercontent.com/trfore/proxmox-template-scripts/refs/heads/main/scripts/{build-template,image-update}
+    wget -P /usr/local/bin/ https://raw.githubusercontent.com/scaleoutsean/proxmox-template-scripts/refs/heads/master/scripts/{build-template,image-update}
     ```
 
   - For Systems using ZFS Storage - [scripts-zfs](/scripts-zfs/)
 
     ```bash
-    wget -P /usr/local/bin/ https://raw.githubusercontent.com/trfore/proxmox-template-scripts/refs/heads/main/scripts/{image-update}
-    wget -P /usr/local/bin/ https://raw.githubusercontent.com/trfore/proxmox-template-scripts/refs/heads/main/scripts-zfs/{build-template}
+    wget -P /usr/local/bin/ https://raw.githubusercontent.com/scaleoutsean/proxmox-template-scripts/refs/heads/master/scripts/{image-update}
+    wget -P /usr/local/bin/ https://raw.githubusercontent.com/scaleoutsean/proxmox-template-scripts/refs/heads/master/scripts-zfs/{build-template}
+    ```
+
+  - For those who may want to add extra disks or inject user credentials:
+    ```bash
+    wget -P /usr/local/bin https://raw.githubusercontent.com/scaleoutsean/proxmox-template-scripts/refs/heads/master/code-examples/clone-and-provision
     ```
 
 - Change the scripts ownership and permissions:
 
   ```bash
-  chown root:root /usr/local/bin/{build-template,image-update}
-  chmod +x /usr/local/bin/{build-template,image-update}
+  chown root:root /usr/local/bin/{build-template,image-update,clone-and-provision}
+  chmod +x /usr/local/bin/{build-template,image-update,clone-and-provision}
   ```
 
 - Confirm `/usr/local/bin` is added to `PATH`:
@@ -269,10 +274,13 @@ filesystem/mount setup.
 openssl passwd -6
 
 # clone template 9000 into db-vm01 (ID 9101) and add a 16G extra disk
-./code-examples/clone-and-provision \
+clone-and-provision \
   --template-id 9000 --id 9101 --name db-vm01 \
+  --full-clone false \
   --datastore local-lvm --size 16G \
   --mountpoint /home/jack --fstype xfs \
+  --net-bridge vmbr0 \
+  --net-vlan null \
   --ci-user jack --ssh-pubkey-file /root/.ssh/id_ed25519.pub \
   --ci-password-hash '$6$...'
 ```
@@ -281,18 +289,26 @@ Notes:
 
 - The script writes a per-VM cloud-init snippet to
   `/var/lib/vz/snippets/<vm-name>-user-data.yaml`.
+- Linked clone is the default (`--full-clone false`) to avoid copying the full
+  OS disk.
+- `--size` expects `G` or `T` units (for example `16G`, `1T`).
 - The script uses `--virtio1` for the extra disk and sets a serial so the guest
   can mount by `/dev/disk/by-id/virtio-<serial>`.
+- `--net-bridge` sets the `bridge=` value on `net0` (default behavior is to
+  inherit bridge from the template).
+- `--net-vlan` controls the VLAN tag on `net0`; default is `null`, which removes
+  an inherited `tag=<id>` from the cloned template NIC.
+- For directory-backed storage like `local`, the script automatically creates
+  the extra qcow2 volume first, then attaches it if `<storage>:<size>` syntax
+  is rejected.
+- On older Proxmox releases without `qm disk create`, the script falls back to
+  `qemu-img create` plus `qm disk rescan --vmid <id>` for `local` storage.
 - Start the VM after cloning with `qm start <vmid>` so cloud-init can apply the
   new user-data.
 
-## Contributors
+## Credit
 
-- [trfore](https://github.com/trfore) - original author and maintainer
-
-Special thanks to all those who have [contributed to the project](https://github.com/trfore/proxmox-template-scripts/graphs/contributors)!
-
-Interested in adding a distro or fixing a bug? Feel free to create an issue or pull request!
+- [trfore](https://github.com/trfore) - original author and maintainer of upstream repository
 
 ## License
 

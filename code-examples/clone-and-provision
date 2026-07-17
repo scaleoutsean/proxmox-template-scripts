@@ -8,12 +8,14 @@ set -euo pipefail
 TEMPLATE_ID=${TEMPLATE_ID:-"9000"}
 VM_ID=${VM_ID:-"9100"}
 VM_NAME=${VM_NAME:-"cloned-vm"}
-FULL_CLONE=${FULL_CLONE:-"true"}
+FULL_CLONE=${FULL_CLONE:-"false"}
 
 EXTRA_DATASTORE=${EXTRA_DATASTORE:-"local-lvm"}
 EXTRA_SIZE=${EXTRA_SIZE:-"16G"}
 EXTRA_MOUNTPOINT=${EXTRA_MOUNTPOINT:-"/home/jack"}
 EXTRA_FSTYPE=${EXTRA_FSTYPE:-"xfs"}
+NET_VLAN=${NET_VLAN:-"null"}
+NET_BRIDGE=${NET_BRIDGE:-""}
 
 CI_USER=${CI_USER:-"jack"}
 CI_PASSWORD_HASH=${CI_PASSWORD_HASH:-""}
@@ -35,11 +37,13 @@ Required:
   --ci-password-hash <HASH>  SHA-512 hash from: openssl passwd -6
 
 Optional:
-  --full-clone <true|false>  Full clone (default: true)
+  --full-clone <true|false>  Full clone (default: false, linked clone)
   --datastore <NAME>         Extra disk datastore (default: local-lvm)
-  --size <SIZE>              Extra disk size (default: 16G)
+  --size <SIZE>              Extra disk size, GiB/TiB only (default: 16G)
   --mountpoint <PATH>        Mount point in guest (default: /home/jack)
   --fstype <ext4|xfs>        Filesystem for extra disk (default: xfs)
+  --net-bridge <BRIDGE>      Network bridge for net0, e.g. vmbr0
+  --net-vlan <ID|null>       VLAN tag for net0, null removes tag (default: null)
   --ci-user <NAME>           Cloud-init username (default: jack)
   --ssh-pubkey-file <PATH>   Public key file (default: ~/.ssh/id_rsa.pub)
 
@@ -48,67 +52,89 @@ Example:
     --template-id 9000 --id 9101 --name db-vm01 \
     --datastore local-lvm --size 16G \
     --mountpoint /home/jack --fstype xfs \
+    --net-bridge vmbr0 \
+    --net-vlan null \
     --ci-user jack --ssh-pubkey-file /root/.ssh/id_ed25519.pub \
     --ci-password-hash '$6$...'
 EOF
   exit 2
 }
 
-for _ in "$@"; do
-  [[ $# -gt 1 && ${2} == -* ]] && err "Missing argument for ${1}"
-  case "${1}" in
+while [[ $# -gt 0 ]]; do
+  case "$1" in
   --help|-h)
     usage
     ;;
   --template-id)
-    TEMPLATE_ID=${2}
+    [[ $# -lt 2 || "$2" == -* ]] && err "Missing argument for $1"
+    TEMPLATE_ID=$2
     shift 2
     ;;
   --id)
-    VM_ID=${2}
+    [[ $# -lt 2 || "$2" == -* ]] && err "Missing argument for $1"
+    VM_ID=$2
     shift 2
     ;;
   --name)
-    VM_NAME=${2}
+    [[ $# -lt 2 || "$2" == -* ]] && err "Missing argument for $1"
+    VM_NAME=$2
     shift 2
     ;;
   --full-clone)
-    FULL_CLONE=${2}
+    [[ $# -lt 2 || "$2" == -* ]] && err "Missing argument for $1"
+    FULL_CLONE=$2
     shift 2
     ;;
   --datastore)
-    EXTRA_DATASTORE=${2}
+    [[ $# -lt 2 || "$2" == -* ]] && err "Missing argument for $1"
+    EXTRA_DATASTORE=$2
     shift 2
     ;;
   --size)
-    EXTRA_SIZE=${2}
+    [[ $# -lt 2 || "$2" == -* ]] && err "Missing argument for $1"
+    EXTRA_SIZE=$2
     shift 2
     ;;
   --mountpoint)
-    EXTRA_MOUNTPOINT=${2}
+    [[ $# -lt 2 || "$2" == -* ]] && err "Missing argument for $1"
+    EXTRA_MOUNTPOINT=$2
     shift 2
     ;;
   --fstype)
-    EXTRA_FSTYPE=${2}
+    [[ $# -lt 2 || "$2" == -* ]] && err "Missing argument for $1"
+    EXTRA_FSTYPE=$2
+    shift 2
+    ;;
+  --net-bridge)
+    [[ $# -lt 2 || "$2" == -* ]] && err "Missing argument for $1"
+    NET_BRIDGE=$2
+    shift 2
+    ;;
+  --net-vlan)
+    [[ $# -lt 2 || "$2" == -* ]] && err "Missing argument for $1"
+    NET_VLAN=$2
     shift 2
     ;;
   --ci-user)
-    CI_USER=${2}
+    [[ $# -lt 2 || "$2" == -* ]] && err "Missing argument for $1"
+    CI_USER=$2
     shift 2
     ;;
   --ci-password-hash)
-    CI_PASSWORD_HASH=${2}
+    [[ $# -lt 2 || "$2" == -* ]] && err "Missing argument for $1"
+    CI_PASSWORD_HASH=$2
     shift 2
     ;;
   --ssh-pubkey-file)
-    SSH_PUBKEY_FILE=${2}
+    [[ $# -lt 2 || "$2" == -* ]] && err "Missing argument for $1"
+    SSH_PUBKEY_FILE=$2
     shift 2
     ;;
   -* )
     err "Unknown Argument: $1"
     ;;
   *)
-    break
+    err "Unexpected positional argument: $1"
     ;;
   esac
 done
@@ -121,6 +147,18 @@ done
 
 if [[ "${EXTRA_FSTYPE}" != "xfs" && "${EXTRA_FSTYPE}" != "ext4" ]]; then
   err "--fstype must be xfs or ext4"
+fi
+
+if [[ "${FULL_CLONE}" != "true" && "${FULL_CLONE}" != "false" ]]; then
+  err "--full-clone must be true or false"
+fi
+
+if [[ ! "${EXTRA_SIZE}" =~ ^[0-9]+[GgTt]$ ]]; then
+  err "--size must be in GiB/TiB (for example: 16G, 1T)"
+fi
+
+if [[ "${NET_VLAN}" != "null" && ! "${NET_VLAN}" =~ ^[0-9]{1,4}$ ]]; then
+  err "--net-vlan must be null or a numeric VLAN ID"
 fi
 
 if ! command -v qm >/dev/null 2>&1; then
@@ -149,6 +187,8 @@ echo "Extra Datastore:    ${EXTRA_DATASTORE}"
 echo "Extra Disk Size:    ${EXTRA_SIZE}"
 echo "Extra Filesystem:   ${EXTRA_FSTYPE}"
 echo "Extra Mount Point:  ${EXTRA_MOUNTPOINT}"
+echo "Network Bridge:     ${NET_BRIDGE:-inherit}"
+echo "Network VLAN:       ${NET_VLAN}"
 echo "Cloud-init User:    ${CI_USER}"
 echo "Cloud-init Snippet: ${snippet_file}"
 
@@ -218,8 +258,56 @@ else
   qm clone "${TEMPLATE_ID}" "${VM_ID}" --name "${VM_NAME}" --full false
 fi
 
+echo "Configuring network VLAN..."
+current_net0=$(qm config "${VM_ID}" | awk -F': ' '/^net0:/{print $2; exit}')
+[[ -z "${current_net0}" ]] && err "Missing net0 config on cloned VM"
+
+if [[ "${NET_VLAN}" == "null" ]]; then
+  updated_net0=$(echo "${current_net0}" | sed -E 's/,?tag=[0-9]+//g' | sed -E 's/,,+/,/g; s/^,|,$//g')
+else
+  if echo "${current_net0}" | grep -q 'tag='; then
+    updated_net0=$(echo "${current_net0}" | sed -E "s/tag=[0-9]+/tag=${NET_VLAN}/")
+  else
+    updated_net0="${current_net0},tag=${NET_VLAN}"
+  fi
+fi
+
+if [[ -n "${NET_BRIDGE}" ]]; then
+  if echo "${updated_net0}" | grep -q 'bridge='; then
+    updated_net0=$(echo "${updated_net0}" | sed -E "s/bridge=[^,]+/bridge=${NET_BRIDGE}/")
+  else
+    updated_net0="${updated_net0},bridge=${NET_BRIDGE}"
+  fi
+fi
+
+qm set "${VM_ID}" --net0 "${updated_net0}"
+
 echo "Adding extra disk..."
-qm set "${VM_ID}" --virtio1 "${EXTRA_DATASTORE}:${EXTRA_SIZE},discard=on,ssd=1,serial=${disk_serial}"
+primary_disk_spec="${EXTRA_DATASTORE}:${EXTRA_SIZE},discard=on,serial=${disk_serial}"
+if ! disk_add_error=$(qm set "${VM_ID}" --virtio1 "${primary_disk_spec}" 2>&1); then
+  # dir-backed storage (for example "local") cannot allocate from <storage>:<size> on this path.
+  # Create the volume first, then attach the created volid.
+  if echo "${disk_add_error}" | grep -qi "unable to parse directory volume name"; then
+    echo "Primary disk syntax failed for ${EXTRA_DATASTORE}; creating disk volume, then attaching..."
+    if ! qm disk create "${VM_ID}" "${EXTRA_DATASTORE}" --size "${EXTRA_SIZE}" --format qcow2 >/dev/null 2>&1; then
+      if [[ "${EXTRA_DATASTORE}" == "local" ]]; then
+        command -v qemu-img >/dev/null 2>&1 || err "qemu-img is required for local directory fallback"
+        local_images_dir="/var/lib/vz/images/${VM_ID}"
+        local_disk_file="${local_images_dir}/vm-${VM_ID}-disk-extra.qcow2"
+        mkdir -p "${local_images_dir}"
+        qemu-img create -f qcow2 "${local_disk_file}" "${EXTRA_SIZE}" >/dev/null
+        qm disk rescan --vmid "${VM_ID}" >/dev/null
+      else
+        err "Automatic fallback could not create disk on datastore '${EXTRA_DATASTORE}'. On this Proxmox version, use --datastore local or create/attach the disk manually."
+      fi
+    fi
+    created_extra_disk=$(qm config "${VM_ID}" | awk -F': ' '/^unused[0-9]+:/{v=$2} END{print v}')
+    [[ -z "${created_extra_disk}" ]] && err "Failed to discover created extra disk volume"
+    qm set "${VM_ID}" --virtio1 "${created_extra_disk},discard=on,serial=${disk_serial}"
+  else
+    err "Failed adding extra disk: ${disk_add_error}"
+  fi
+fi
 
 echo "Applying cloud-init user-data snippet..."
 qm set "${VM_ID}" --cicustom "user=local:snippets/${snippet_name}"
