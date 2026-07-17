@@ -234,9 +234,15 @@ function main() {
   # import the cloud image
   /usr/sbin/qm disk import "${VM_ID}" "${VM_IMAGE}" "${VM_STORAGE}"
 
+  # use the imported volume ID from qm config (works for lvm, zfs, and dir storage)
+  imported_disk=$(/usr/sbin/qm config "${VM_ID}" | awk -F': ' '/^unused[0-9]+:/{print $2; exit}')
+  if [ -z "${imported_disk}" ]; then
+    err "Unable to find imported disk volume in VM config"
+  fi
+
   # attach the disk to the VM and set it as boot
   /usr/sbin/qm set "${VM_ID}" --boot order=scsi0 \
-    --scsi0 "${VM_STORAGE}":vm-"${VM_ID}"-disk-0,cache=writeback,discard=on,ssd=1
+    --scsi0 "${imported_disk}",cache=writeback,discard=on,ssd=1
 
   # increase the disk image size
   /usr/sbin/qm resize "${VM_ID}" scsi0 +"${VM_RESIZE}"

@@ -18,8 +18,7 @@ Blog post: [Golden Images and Proxmox Templates with cloud-init]
   download the latest or missing image.
   - Works with `alma`, `centos`, `debian`, `fedora` and `ubuntu` cloud images.
   - **Requires** `curl`
-  - **Note**: This script will change the file extension to `*.img` for visibility in the Proxmox GUI, `qm disk import`
-    will automatically convert disk image.
+  - **Note**: This script will change the file extension to `*.img` for visibility in the Proxmox GUI, `qm disk import` will automatically convert disk image.
 
 ## Systemd Templates
 
@@ -121,8 +120,7 @@ image-update ubuntu-24 --remove
 | `--remove`        | Remove image and backups before updating. Not compatible with `--backup`  | `false`                    | No       |
 | `--storage`, `-s` | Specify the image storage path                                            | `/var/lib/vz/template/iso` | No       |
 
-Adding the `--backup` flag will backup existing images for the set **distribution and release** before downloading the
-latest image, using the naming scheme: `IMAGE_NAME.backup.img`.
+Adding the `--backup` flag will backup existing images for the set **distribution and release** before downloading the latest image, using the naming scheme: `IMAGE_NAME.backup.img`.
 
 Adding the `--date` flag will append the release date to name in `YYYY-MM-DD` or `YYYY-MMM-DD` format, e.g.
 `ubuntu-24.04-server-cloudimg-amd64-YYYY-MM-DD.img`. The format is not configurable as it is pulled from the
@@ -130,9 +128,7 @@ distribution's release page.
 
 #### Automatically Check for Updates Using Cron
 
-The majority of images are updated every 1 to 2 months, so be considerate and don't check more than once a month for
-new cloud images. **Note**: Consider staggering cron jobs to different minute (`0`), hour (`2`), and day (`10`) across
-distributions and releases.
+The majority of images are updated every 1 to 2 months, so be considerate and don't check more than once a month for new cloud images. **Note**: Consider staggering cron jobs to different minute (`0`), hour (`2`), and day (`10`) across distributions and releases.
 
 ```bash
 0 2 10 * * /usr/local/bin/image-update -d <distro_name> -r <release_name>
@@ -163,11 +159,9 @@ The `image-update` script can also parse a single argument for distribution and 
 is useful in creating systemd timers. You can still pass the `--remove` and `--storage` flags as well, however,
 `--distro` and `--release` are overridden when using this approach.
 
-To use systemd timers, add the [template files](/systemd-timer/) to the `/etc/systemd/system` directory and start at
-step 3. Or create a service and timer template, as follows:
+To use systemd timers, add the [template files](/systemd-timer/) to the `/etc/systemd/system` directory and start at step 3. Or create a service and timer template, as follows:
 
-1. Create a service, `image-update@.service`, in the `/etc/systemd/system` directory. Add additional script flags to
-   `ExecStart=` after `%i`.
+1. Create a service, `image-update@.service`, in the `/etc/systemd/system` directory. Add additional script flags to `ExecStart=` after `%i`.
 
    ```xml
    [Unit]
@@ -180,10 +174,7 @@ step 3. Or create a service and timer template, as follows:
    ExecStart=/usr/local/bin/image-update %i --remove
    ```
 
-2. Create a timer, `image-update@.timer`, in the `/etc/systemd/system` directory. **Note**: Change the day and time this
-   script runs on, `OnCalendar=*-*-10 02:00:00`. To prevent multiple timers from triggering simultaneously,
-   `RandomizedDelaySec=3h` will randomly select a time within a 3-hour window and `AccuracySec=1us` will prevent systemd
-   from grouping the timers.
+2. Create a timer, `image-update@.timer`, in the `/etc/systemd/system` directory. **Note**: Change the day and time this script runs on, `OnCalendar=*-*-10 02:00:00`. To prevent multiple timers from triggering simultaneously, `RandomizedDelaySec=3h` will randomly select a time within a 3-hour window and `AccuracySec=1us` will prevent systemd from grouping the timers.
 
    ```xml
    [Unit]
@@ -232,8 +223,7 @@ systemctl status image-update@ubuntu-24.service
 ### Proxmox Template Script
 
 [`build-template`](/scripts/build-template): A wrapper script around `qm` to build Proxmox templates. This script
-assumes the use of cloud-init vendor data file located at `local:snippets/vendor-data.yaml`. Detailed usage available on
-the blog post: [Golden Images and Proxmox Templates with cloud-init], and example file:
+assumes the use of cloud-init vendor data file located at `local:snippets/vendor-data.yaml`. Detailed usage available on the blog post: [Golden Images and Proxmox Templates with cloud-init], and example file:
 [`cloud-init/vendor-data-minimal.yaml`](/cloud-init/vendor-data-minimal.yaml).
 
 ```bash
