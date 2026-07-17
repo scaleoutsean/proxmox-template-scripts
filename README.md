@@ -22,6 +22,7 @@ Blog post: [Golden Images and Proxmox Templates with cloud-init]
   - Works with `alma`, `centos`, `debian`, `fedora` and `ubuntu` cloud images.
   - **Requires** `curl`
   - **Note**: This script will change the file extension to `*.img` for visibility in the Proxmox GUI, `qm disk import` will automatically convert disk image.
+- [`clone-and-provision`](/scripts/clone-and-provision): Clone a VM template to a VM and optionally performs additional provisioning steps
 
 ## Systemd Templates
 
